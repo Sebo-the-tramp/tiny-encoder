@@ -1,194 +1,114 @@
-import os
-import inspect
-from typing import Dict, Any, List, Tuple
+import time
+start_tm = time.perf_counter()
+
+import math
+from typing import Tuple, cast
 import numpy as np
-from tinygrad import Tensor, nn, dtypes
+from tinygrad import Tensor, nn, GlobalCounters, TinyJit, dtypes
+from tinygrad.helpers import trange, getenv, Context
+from extra.lr_scheduler import CosineAnnealingLR
 
 from utils.data_generation import generate_dataset
-from encoders.base_encoder import BaseEncoder
-from database.experiment_db import ExperimentDB
+from encoders.mlp_encoder import MLPEncoder
 
-from utils.boilerplate import load_encoders
-from utils.losses import get_loss_function
-
-# external libraries
-from equidistantpoints import EquidistantPoints
-
-def train_encoder(encoder: BaseEncoder, hyperparameters: Dict[str, Any]) -> Tuple[float, List[float], List[float]]:
-    """Train an encoder with given hyperparameters and return losses"""
-    # Generate training and validation data
-    train_data, val_data, test_data = generate_dataset(num_samples=hyperparameters.get('num_samples', 1000))
-
-    # Get all parameters from the model
-    parameters = nn.state.get_parameters(encoder)
-    print(parameters)
-    print(f"Number of parameters: {len(parameters)}")
-    
-    # Create optimizer with all parameters
-    initial_lr = hyperparameters.get('learning_rate', 0.01)  # Start with a higher learning rate
-    optimizer = nn.optim.SGD(parameters, lr=initial_lr)
-    
-    # Training loop
-    batch_size = hyperparameters.get('batch_size', 16)
-    epochs = hyperparameters.get('epochs', 20)
-    
-    train_losses = []
-    val_losses = []
-    
-    # Learning rate decay parameters
-    decay_rate = hyperparameters.get('decay_rate', 0.85)  # How much to decay per epoch
-    min_lr = hyperparameters.get('min_lr', 0.00000001)  # Minimum learning rate
-    
-    # Get loss function from hyperparameters
-    loss_fn_name = hyperparameters.get('loss_fn', 'mse')
-    loss_fn = get_loss_function(loss_fn_name)
-    print(f"Using loss function: {loss_fn_name}")
-    
-    for epoch in range(epochs):
-        # Update learning rate with decay
-        current_lr = max(initial_lr * (decay_rate ** epoch), min_lr)
-        optimizer.lr = current_lr
-        
-        # Set training mode
-        Tensor.training = True
-        indices = np.random.permutation(len(train_data))
-        epoch_loss = 0
-        
-        for start_idx in range(0, len(train_data), batch_size):
-            batch_indices = indices[start_idx:start_idx+batch_size]
-            X_batch = Tensor(train_data[batch_indices], dtype=dtypes.float32)
-            
-            # Zero gradients
-            optimizer.zero_grad()
-            
-            # Forward pass
-            outputs = encoder(X_batch)
-            
-            # Calculate loss using the provided loss function
-            loss = loss_fn(outputs, X_batch)
-            
-            # Backward pass
-            loss.backward()
-            
-            # Step optimizer
-            optimizer.step()
-            
-            # Accumulate loss
-            epoch_loss += loss.numpy().item()
-        
-        avg_train_loss = epoch_loss * batch_size / len(train_data)
-        train_losses.append(avg_train_loss)
-        
-        # Validation
-        Tensor.training = False
-        val_outputs = encoder(Tensor(val_data, dtype=dtypes.float32))
-        val_loss = loss_fn(val_outputs, Tensor(val_data, dtype=dtypes.float32)).numpy().item()
-        val_losses.append(val_loss)
-        
-        if (epoch+1) % 5 == 0:
-            print(f'Epoch [{epoch+1}/{epochs}], Train Loss: {avg_train_loss:.8f}, Val Loss: {val_loss:.8f}, LR: {current_lr:.8f}')
-    
-    # Final evaluation
-    Tensor.training = False
-    test_outputs = encoder(Tensor(test_data, dtype=dtypes.float32))
-    final_test_loss = loss_fn(test_outputs, Tensor(test_data, dtype=dtypes.float32)).numpy().item()
-    print(f"Final Test Loss: {final_test_loss:.4f}")
-    
-    return final_test_loss, train_losses, val_losses
-
-def main():
-    # Initialize database
-    db = ExperimentDB()
-    
-    # Create plots directory
-    os.makedirs("plots", exist_ok=True)
-    
-    # Load all available encoders
-    encoders = load_encoders()
-    print(f"Found encoders: {list(encoders.keys())}")
-    
-    # Define hyperparameter configurations to test
-    configurations = [
-        {
-            'input_size': 7,
-            'hidden_size': 1024,
-            'output_size': 7,
-            'dropout_rate': 0.2,
-            'learning_rate': 0.01,
-            'batch_size': 128,
-            'epochs': 500,
-            'num_samples': 100000,
-            'loss_fn': 'mse',  # Use string identifier instead of function
-            'decay_rate': 0.85,
-            'min_lr': 0.00000001
-        },
-        {
-            'input_size': 7,
-            'hidden_size': 1024,
-            'output_size': 7,
-            'dropout_rate': 0.2,
-            'learning_rate': 0.01,
-            'batch_size': 128,
-            'epochs': 500,
-            'num_samples': 100000,
-            'loss_fn': 'mae',  # Use string identifier instead of function
-            'decay_rate': 0.85,
-            'min_lr': 0.00000001
-        },
-        {
-            'input_size': 7,
-            'hidden_size': 1024,
-            'output_size': 7,
-            'dropout_rate': 0.2,
-            'learning_rate': 0.01,
-            'batch_size': 128,
-            'epochs': 500,
-            'num_samples': 100000,
-            'loss_fn': 'huber',  # Use string identifier instead of function
-            'decay_rate': 0.85,
-            'min_lr': 0.00000001
-        },
-        {
-            'input_size': 7,
-            'hidden_size': 1024,
-            'output_size': 7,
-            'dropout_rate': 0.2,
-            'learning_rate': 0.01,
-            'batch_size': 128,
-            'epochs': 500,
-            'num_samples': 100000,
-            'loss_fn': 'angular_loss',  # Use string identifier instead of function
-            'decay_rate': 0.85,
-            'min_lr': 0.00000001
-        }
-    ]
-    
-    # Run experiments for each encoder and configuration
-    for encoder_name, encoder_class in encoders.items():
-        print(f"\nRunning experiments for {encoder_name}")
-        
-        for config in configurations:
-            # Check if experiment already exists
-            if db.experiment_exists(encoder_name, config):
-                print(f"Experiment already exists for {encoder_name} with config: {config}")
-                continue
-            
-            print(f"Training {encoder_name} with config: {config}")
-            encoder = encoder_class(**{k: v for k, v in config.items() 
-                                    if k in inspect.signature(encoder_class.__init__).parameters})
-            
-            # Train the encoder and get results
-            test_loss, train_losses, val_losses = train_encoder(encoder, config)
-            
-            # Save results
-            experiment_id = db.save_experiment(
-                encoder_name, 
-                config, 
-                train_loss=train_losses[-1],
-                val_loss=val_losses[-1] if val_losses else None,
-                test_loss=test_loss
-            )
-            print(f"Experiment {experiment_id} completed with test loss: {test_loss:.4f}")
+batchsize = getenv("BS", 1024*80)
+bias_scaler = 64
+hyp = {
+  'misc': {   
+    'train_epochs': 1000,
+    'device': 'mps',
+  },
+  'opt': {
+    'loss_scale_scaler': 1./32, # * Regularizer inside the loss summing (range: ~1/512 - 16+). FP8 should help with this somewhat too, whenever it comes out. :)
+  },
+}
 
 if __name__ == "__main__":
-    main() 
+    # *** dataset ***
+    X_train, X_val, X_test = generate_dataset(batch_size=1024, n_batches=80, data_type='random')
+    print(f"X_train: {X_train.shape} X_val: {X_val.shape} X_test: {X_test.shape}")
+
+    # *** model ***
+    model = MLPEncoder()
+    state_dict = nn.state.get_state_dict(model)
+
+    num_steps_per_epoch          = X_train.shape[0] // batchsize
+    total_train_steps            = math.ceil(num_steps_per_epoch * hyp['misc']['train_epochs'])
+    loss_batchsize_scaler        = 512/batchsize
+
+    opt                          = nn.optim.Adam(nn.state.get_parameters(model), lr=0.01)
+    lr_sched                     = CosineAnnealingLR(opt, T_max=total_train_steps, eta_min=0.00000001)
+
+    def loss_fn(out, Y):
+        return ((out - Y) ** 2).mean()
+        # return ((out - Y) ** 2).mul(hyp['opt']['loss_scale_scaler']*loss_batchsize_scaler).sum().div(hyp['opt']['loss_scale_scaler'])
+
+    @TinyJit
+    @Tensor.train()
+    def train_step(idxs:Tensor) -> Tensor:
+        with Context(SPLIT_REDUCEOP=0, FUSE_ARANGE=1):
+            # Get the batch using tensor indexing
+            X = X_train[idxs]
+            
+            # Forward pass
+            out = model(X)
+            loss = loss_fn(out, X)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            lr_sched.step()
+            return loss / (batchsize*loss_batchsize_scaler)
+
+    eval_batchsize = 1024
+    @TinyJit
+    @Tensor.test()
+    def val_step() -> Tuple[Tensor, Tensor]:
+        Tensor.no_grad = True
+        loss = []
+        for i in range(0, X_val.shape[0], eval_batchsize):
+            out = model(X_val)
+            loss.append(loss_fn(out, X_val))
+        ret = Tensor.stack(*loss).mean() / (batchsize*loss_batchsize_scaler)
+        Tensor.no_grad = False
+        return ret
+    
+    @TinyJit
+    @Tensor.test()
+    def test_step() -> Tuple[Tensor, Tensor]:
+        Tensor.no_grad = True
+        loss = []
+        for i in range(0, X_test.shape[0], eval_batchsize):
+            out = model(X_test)
+            loss.append(loss_fn(out, X_test))
+        ret = Tensor.stack(*loss).mean() / (batchsize*loss_batchsize_scaler)
+        Tensor.no_grad = False
+        return ret
+
+    np.random.seed(1337)
+    for epoch in range(math.ceil(hyp['misc']['train_epochs'])):
+        gst = time.perf_counter()
+        idxs = np.arange(X_train.shape[0])
+        np.random.shuffle(idxs)
+        tidxs = Tensor(idxs, dtype='int')[:num_steps_per_epoch*batchsize].reshape(num_steps_per_epoch, batchsize)
+        train_loss:float = 0
+        curr_gflops = 0
+        for epoch_step in (t:=trange(num_steps_per_epoch)):
+            st = time.perf_counter()
+            GlobalCounters.reset()
+            loss = train_step(tidxs[epoch_step].contiguous()).float().item()
+            current_lr = lr_sched.get_lr().item()
+            current_gflops = GlobalCounters.global_ops / (1e9 * (time.perf_counter() - st))
+            t.set_description(f"*** loss: {loss:5.10f}   lr: {current_lr:.6f}"
+                            f"   tm: {(et:=(time.perf_counter()-st))*1000:6.2f} ms {GlobalCounters.global_ops/(1e9*et):7.0f} GFLOPS")
+            train_loss += loss
+
+        gmt = time.perf_counter()
+        GlobalCounters.reset()
+        val_loss = val_step().float().item()
+        get = time.perf_counter()
+        current_lr = lr_sched.get_lr().item()
+
+        print(f"\033[F*** epoch {epoch:3d}  GFLOPS: {current_gflops:7.0f}  tm: {(gmt-gst):5.2f} s    val_tm: {(get-gmt):5.2f} s lr: {current_lr:.6f}  train_loss: {train_loss/num_steps_per_epoch:5.10f}   val_loss: {val_loss:5.10f} @ {get-start_tm:6.2f} s  ")
+
+    test_loss = test_step().float().item()
+    print(f"*** test_loss: {test_loss:5.10f} @ {time.perf_counter()-start_tm:6.2f} s  ")
