@@ -1,3 +1,5 @@
 /database/experiment_*.db
 /database/experiment_*.db-journal
 /tinygrad/
+
+**.pyc

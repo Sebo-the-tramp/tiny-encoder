@@ -2,19 +2,24 @@ import numpy as np
 from equidistantpoints import EquidistantPoints
 from typing import Tuple
 from tinygrad import Tensor, dtypes
+from utils.conversion import quaternion_to_euler
 
-def generate_quaternion_data(num_samples=10000):
+def generate_quaternion_data(batch_size=1024, n_batches=80):
     """The idea is to have a grid of points sampled on the unit sphere
     and then convert them to quaternions. For validation we just use a random subset of the same grid.
     """
 
+    val_batch_size = int(0.1 * n_batches)
+    test_batch_size = int(0.2 * n_batches)
+
+    num_samples = (n_batches + val_batch_size + test_batch_size) * batch_size
+
     points = EquidistantPoints(n_points=num_samples)
     cartesian_coordinates = np.array(points.cartesian)
 
-    val_split = 0.1
-    test_split = 0.2
-    n_val = int(val_split * len(cartesian_coordinates))
-    n_test = int(test_split * len(cartesian_coordinates))
+    n_val = val_batch_size * batch_size
+    n_test = test_batch_size * batch_size
+    
     step = num_samples // n_val
 
     val_indices = np.arange(0, len(cartesian_coordinates), step)  # Take every 10th point for a uniform distribution
@@ -100,6 +105,32 @@ def generate_dataset_equidistant(num_samples=10000):
 
     return train_set, val_set, test_set
 
+
+def generate_dataset_equidistant_only_angles(batch_size: int = 1024, n_batches: int = 80) -> Tuple[Tensor, Tensor, Tensor]:
+
+    train_quaternions, val_quaternions, test_quaternions = generate_quaternion_data(batch_size=batch_size, n_batches=n_batches)
+
+    # we need to shuffle each dataset
+    train_indices = np.random.permutation(len(train_quaternions))
+    val_indices = np.random.permutation(len(val_quaternions))
+    test_indices = np.random.permutation(len(test_quaternions))
+
+    train_quaternions = train_quaternions[train_indices]
+    val_quaternions = val_quaternions[val_indices]
+    test_quaternions = test_quaternions[test_indices]
+
+    # quaternions to angles x,y,z
+    train_set = quaternion_to_euler(train_quaternions[:, 1], train_quaternions[:, 2], train_quaternions[:, 3], train_quaternions[:, 0])
+    val_set = quaternion_to_euler(val_quaternions[:, 1], val_quaternions[:, 2], val_quaternions[:, 3], val_quaternions[:, 0])
+    test_set = quaternion_to_euler(test_quaternions[:, 1], test_quaternions[:, 2], test_quaternions[:, 3], test_quaternions[:, 0])
+
+    # convert to tensors
+    train_set = Tensor(train_set, dtype=dtypes.float32)
+    val_set = Tensor(val_set, dtype=dtypes.float32)
+    test_set = Tensor(test_set, dtype=dtypes.float32)
+
+    return train_set, val_set, test_set
+
 def generate_dataset_random(batch_size:int = 1024, n_batches:int = 100):
 
     val_batch_size = int(0.1 * n_batches)
@@ -132,6 +163,8 @@ def generate_dataset(batch_size: int = 1024, n_batches: int = 80, data_type: str
     """
     if data_type == 'random':
         return generate_dataset_random(batch_size=batch_size, n_batches=n_batches)
+    if data_type == 'equidistant_only_angles':
+        return generate_dataset_equidistant_only_angles(batch_size=batch_size, n_batches=n_batches)
     elif data_type == 'equally_spaced':
         return generate_dataset_equidistant(batch_size=batch_size, n_batches=n_batches)
     else:

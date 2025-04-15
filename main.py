@@ -9,6 +9,7 @@ from tinygrad.helpers import trange, getenv, Context
 from extra.lr_scheduler import CosineAnnealingLR
 
 from utils.data_generation import generate_dataset
+from utils.layout import TrainingDashboard
 from encoders.mlp_encoder import MLPEncoder
 
 batchsize = getenv("BS", 1024*80)
@@ -17,10 +18,7 @@ hyp = {
   'misc': {   
     'train_epochs': 1000,
     'device': 'mps',
-  },
-  'opt': {
-    'loss_scale_scaler': 1./32, # * Regularizer inside the loss summing (range: ~1/512 - 16+). FP8 should help with this somewhat too, whenever it comes out. :)
-  },
+  }
 }
 
 if __name__ == "__main__":
@@ -30,18 +28,12 @@ if __name__ == "__main__":
 
     # *** model ***
     model = MLPEncoder()
-    state_dict = nn.state.get_state_dict(model)
 
     num_steps_per_epoch          = X_train.shape[0] // batchsize
     total_train_steps            = math.ceil(num_steps_per_epoch * hyp['misc']['train_epochs'])
     loss_batchsize_scaler        = 512/batchsize
 
-    opt                          = nn.optim.Adam(nn.state.get_parameters(model), lr=0.01)
-    lr_sched                     = CosineAnnealingLR(opt, T_max=total_train_steps, eta_min=0.00000001)
-
-    def loss_fn(out, Y):
-        return ((out - Y) ** 2).mean()
-        # return ((out - Y) ** 2).mul(hyp['opt']['loss_scale_scaler']*loss_batchsize_scaler).sum().div(hyp['opt']['loss_scale_scaler'])
+    dashboard = TrainingDashboard()
 
     @TinyJit
     @Tensor.train()
@@ -52,11 +44,11 @@ if __name__ == "__main__":
             
             # Forward pass
             out = model(X)
-            loss = loss_fn(out, X)
-            opt.zero_grad()
+            loss = model.loss_fn(out, X)
+            model.opt.zero_grad()
             loss.backward()
-            opt.step()
-            lr_sched.step()
+            model.opt.step()
+            model.lr_sched.step()
             return loss / (batchsize*loss_batchsize_scaler)
 
     eval_batchsize = 1024
@@ -67,7 +59,7 @@ if __name__ == "__main__":
         loss = []
         for i in range(0, X_val.shape[0], eval_batchsize):
             out = model(X_val)
-            loss.append(loss_fn(out, X_val))
+            loss.append(model.loss_fn(out, X_val))
         ret = Tensor.stack(*loss).mean() / (batchsize*loss_batchsize_scaler)
         Tensor.no_grad = False
         return ret
@@ -79,7 +71,7 @@ if __name__ == "__main__":
         loss = []
         for i in range(0, X_test.shape[0], eval_batchsize):
             out = model(X_test)
-            loss.append(loss_fn(out, X_test))
+            loss.append(model.loss_fn(out, X_test))
         ret = Tensor.stack(*loss).mean() / (batchsize*loss_batchsize_scaler)
         Tensor.no_grad = False
         return ret
@@ -92,23 +84,29 @@ if __name__ == "__main__":
         tidxs = Tensor(idxs, dtype='int')[:num_steps_per_epoch*batchsize].reshape(num_steps_per_epoch, batchsize)
         train_loss:float = 0
         curr_gflops = 0
-        for epoch_step in (t:=trange(num_steps_per_epoch)):
+        for epoch_step in (t:=range(num_steps_per_epoch)):
             st = time.perf_counter()
             GlobalCounters.reset()
             loss = train_step(tidxs[epoch_step].contiguous()).float().item()
-            current_lr = lr_sched.get_lr().item()
+            current_lr = model.lr_sched.get_lr().item()
             current_gflops = GlobalCounters.global_ops / (1e9 * (time.perf_counter() - st))
-            t.set_description(f"*** loss: {loss:5.10f}   lr: {current_lr:.6f}"
-                            f"   tm: {(et:=(time.perf_counter()-st))*1000:6.2f} ms {GlobalCounters.global_ops/(1e9*et):7.0f} GFLOPS")
+            # t.set_description(f"*** loss: {loss:5.10f}   lr: {current_lr:.6f}"
+            #                 f"   tm: {(et:=(time.perf_counter()-st))*1000:6.2f} ms {GlobalCounters.global_ops/(1e9*et):7.0f} GFLOPS")
             train_loss += loss
+
+        train_loss /= num_steps_per_epoch
 
         gmt = time.perf_counter()
         GlobalCounters.reset()
         val_loss = val_step().float().item()
         get = time.perf_counter()
-        current_lr = lr_sched.get_lr().item()
+        current_lr = model.lr_sched.get_lr().item()
 
-        print(f"\033[F*** epoch {epoch:3d}  GFLOPS: {current_gflops:7.0f}  tm: {(gmt-gst):5.2f} s    val_tm: {(get-gmt):5.2f} s lr: {current_lr:.6f}  train_loss: {train_loss/num_steps_per_epoch:5.10f}   val_loss: {val_loss:5.10f} @ {get-start_tm:6.2f} s  ")
+        dashboard.update(epoch, train_loss, current_lr, current_gflops)
+
+        # print(f"\033[F*** epoch {epoch:3d}  GFLOPS: {current_gflops:7.0f}  tm: {(gmt-gst):5.2f} s    val_tm: {(get-gmt):5.2f} s lr: {current_lr:.6f}  train_loss: {train_loss/num_steps_per_epoch:5.10f}   val_loss: {val_loss:5.10f} @ {get-start_tm:6.2f} s  ")
 
     test_loss = test_step().float().item()
     print(f"*** test_loss: {test_loss:5.10f} @ {time.perf_counter()-start_tm:6.2f} s  ")
+    dashboard.close()
+    print("Finished training")
