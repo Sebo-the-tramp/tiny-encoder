@@ -24,7 +24,7 @@ class TrainingDashboard:
         self.layout = self._create_layout()
         
         # Initialize live display
-        self.live = Live(self.layout, refresh_per_second=10, screen=False)
+        self.live = Live(self.layout, refresh_per_second=1, screen=False)
         self.live.start()
     
     def _info_panel(self, step, loss, gflops=None, epoch=None):
@@ -160,7 +160,7 @@ class TrainingDashboard:
         
         # Update epoch progress if epoch is provided
         if epoch is not None:
-            self.epoch_progress.update(self.epoch_task_id, advance=1)
+            self.epoch_progress.update(self.epoch_task_id, completed=epoch)
         
         # Update layout components
         self.layout["info"].update(self._info_panel(step, loss, gflops, epoch))

@@ -4,7 +4,7 @@ start_tm = time.perf_counter()
 import math
 from typing import Tuple, cast
 import numpy as np
-from tinygrad import Tensor, GlobalCounters, TinyJit
+from tinygrad import Tensor, GlobalCounters, TinyJit, Context
 from tinygrad.helpers import getenv, Context
 
 from utils.data_generation import generate_dataset
@@ -17,24 +17,25 @@ batchsize = getenv("BS", 1024*batches)
 bias_scaler = 64
 hyp = {
   'misc': {   
-    'train_epochs': 1000,
-    'device': 'mps',
+    'train_epochs': 10000,
+    'device': 'cuda',
   }
 }
 
-if __name__ == "__main__":
+if __name__ == "__main__":        
+
     # *** dataset ***
     X_train, X_val, X_test = generate_dataset(batch_size=1024, n_batches=batches, data_type='random')
     print(f"X_train: {X_train.shape} X_val: {X_val.shape} X_test: {X_test.shape}")
 
     # *** model ***
-    model = MLPEncoder()
+    model = MLPEncoder()    
 
-    dashboard = TrainingDashboard()
+    dashboard = TrainingDashboard(epochs=hyp['misc']['train_epochs'])    
 
-    num_steps_per_epoch          = X_train.shape[0] // (1024*80)
+    num_steps_per_epoch          = X_train.shape[0] // (1024*batches)
     total_train_steps            = math.ceil(num_steps_per_epoch * hyp['misc']['train_epochs'])
-    loss_batchsize_scaler        = 512/1024*80
+    loss_batchsize_scaler        = 512/1024*batches
 
     @TinyJit
     @Tensor.train()
@@ -49,7 +50,7 @@ if __name__ == "__main__":
             model.opt.zero_grad()
             loss.backward()
             model.opt.step()
-            model.lr_sched.step()
+            # model.lr_sched.step(current=loss.item())
             return loss / (batchsize*loss_batchsize_scaler)
 
     eval_batchsize = 1024
@@ -78,6 +79,7 @@ if __name__ == "__main__":
         return ret
 
     np.random.seed(1337)
+    # with Context(BEAM=2):
     for epoch in range(math.ceil(hyp['misc']['train_epochs'])):
         gst = time.perf_counter()
         idxs = np.arange(X_train.shape[0])
@@ -89,23 +91,22 @@ if __name__ == "__main__":
             st = time.perf_counter()
             GlobalCounters.reset()
             loss = train_step(tidxs[epoch_step].contiguous()).float().item()
-            current_lr = model.lr_sched.get_lr().item()
+            current_lr = model.opt.lr.item()                
             current_gflops = GlobalCounters.global_ops / (1e9 * (time.perf_counter() - st))
             train_loss += loss
-            dashboard.update(step=epoch_step, loss=train_loss, learning_rate=current_lr, epoch=epoch, gflops=current_gflops)
 
         train_loss /= num_steps_per_epoch
 
         gmt = time.perf_counter()
         GlobalCounters.reset()
         val_loss = val_step().float().item()
-        get = time.perf_counter()
-        current_lr = model.lr_sched.get_lr().item()
-        dashboard.update(step=0, loss=train_loss, learning_rate=current_lr, epoch=epoch, gflops=current_gflops)
-
-        # print(f"\033[F*** epoch {epoch:3d}  GFLOPS: {current_gflops:7.0f}  tm: {(gmt-gst):5.2f} s    val_tm: {(get-gmt):5.2f} s lr: {current_lr:.6f}  train_loss: {train_loss/num_steps_per_epoch:5.10f}   val_loss: {val_loss:5.10f} @ {get-start_tm:6.2f} s  ")
+        get = time.perf_counter()            
+        if(epoch % 100 == 0):
+            current_lr = model.opt.lr.item()
+            model.opt.lr.assign(current_lr * 0.1).realize()
+            dashboard.update(step=0, loss=train_loss, learning_rate=current_lr, epoch=epoch, gflops=current_gflops)
 
     test_loss = test_step().float().item()
     dashboard.close()
     print("Finished training")
-    print(f"*** test_loss: {test_loss:5.10f} @ {time.perf_counter()-start_tm:6.2f} s  ")
+    print(f"*** test_loss: {test_loss:5.10e} @ {time.perf_counter()-start_tm:6.2f} s  ")
