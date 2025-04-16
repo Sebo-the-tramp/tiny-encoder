@@ -125,9 +125,9 @@ def generate_dataset_equidistant_only_angles(batch_size: int = 1024, n_batches: 
     test_set = quaternion_to_euler(test_quaternions[:, 1], test_quaternions[:, 2], test_quaternions[:, 3], test_quaternions[:, 0])
 
     # convert to tensors
-    train_set = Tensor(train_set, dtype=dtypes.float32)
-    val_set = Tensor(val_set, dtype=dtypes.float32)
-    test_set = Tensor(test_set, dtype=dtypes.float32)
+    train_set = Tensor(train_set, dtype=dtypes.float32).permute(1, 0)
+    val_set = Tensor(val_set, dtype=dtypes.float32).permute(1, 0)
+    test_set = Tensor(test_set, dtype=dtypes.float32).permute(1, 0)
 
     return train_set, val_set, test_set
 

@@ -10,7 +10,7 @@ from rich.live import Live
 
 
 class TrainingDashboard:
-    def __init__(self, total_steps=10, batch_size=64, total_items=64000, epochs=1000):
+    def __init__(self, total_steps=4, batch_size=64, total_items=64000, epochs=1000):
         self.total_steps = total_steps
         self.batch_size = batch_size
         self.total_items = total_items
@@ -27,14 +27,13 @@ class TrainingDashboard:
         self.live = Live(self.layout, refresh_per_second=10, screen=False)
         self.live.start()
     
-    def _info_panel(self, step, loss, gflops=None):
+    def _info_panel(self, step, loss, gflops=None, epoch=None):
+        """Create the info panel with training statistics"""
         table = Table.grid(padding=1)
-        table.add_row("[bold yellow]Epoch", f"{step}")
-        # table.add_row("[bold yellow]Step", str(step))
-        # table.add_row("[bold yellow]Items", f"{step * self.batch_size}/{self.total_items}")
-        table.add_row("[bold yellow]Loss", f"{loss:.4f}")
-        table.add_row("[bold yellow]CPU Temp", f"{random.randint(75, 98)} °C")
-        table.add_row("[bold yellow]GFOPS", f"{gflops} GFLOPs")
+        table.add_row("[bold yellow]Step", f"{step}")
+        table.add_row("[bold yellow]Epoch", f"{epoch}")
+        table.add_row("[bold yellow]Loss", f"{loss:.4e}")
+        table.add_row("[bold yellow]GFOPS", f"{gflops:.0f} GFLOPs")
         return Panel(table, title="📊 Training Info")
     
     def _graph_panel_plot_loss(self, losses):
@@ -157,14 +156,14 @@ class TrainingDashboard:
             self.learning_rates.append(learning_rate)
         
         # Update step progress (batches within an epoch)
-        # self.step_progress.update(self.step_task_id, advance=1)
+        self.step_progress.update(self.step_task_id, completed=step)
         
         # Update epoch progress if epoch is provided
         if epoch is not None:
             self.epoch_progress.update(self.epoch_task_id, advance=1)
         
         # Update layout components
-        self.layout["info"].update(self._info_panel(step, loss, gflops))
+        self.layout["info"].update(self._info_panel(step, loss, gflops, epoch))
         self.layout["plot_loss"].update(self._graph_panel_plot_loss(self.losses))
         self.layout["plot_lr"].update(self._graph_panel_plot_lr(self.learning_rates))
         self.layout["step_progress"].update(Panel(self.step_progress, title="🚀 Batch Progress"))
