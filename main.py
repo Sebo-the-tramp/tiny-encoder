@@ -9,9 +9,9 @@ from tinygrad.helpers import getenv, Context
 
 from utils.data_generation import generate_dataset
 from utils.layout import TrainingDashboard
-from encoders.mlp_encoder import MLPEncoder
+from encoders.mlp_encoder_256 import MLPEncoder256
 
-batches = 320
+batches = 100
 
 batchsize = getenv("BS", 1024*batches)
 bias_scaler = 64
@@ -29,7 +29,7 @@ if __name__ == "__main__":
     print(f"X_train: {X_train.shape} X_val: {X_val.shape} X_test: {X_test.shape}")
 
     # *** model ***
-    model = MLPEncoder()    
+    model = MLPEncoder256()
 
     dashboard = TrainingDashboard(epochs=hyp['misc']['train_epochs'])    
 
@@ -79,32 +79,33 @@ if __name__ == "__main__":
         return ret
 
     np.random.seed(1337)
-    # with Context(BEAM=2):
-    for epoch in range(math.ceil(hyp['misc']['train_epochs'])):
-        gst = time.perf_counter()
-        idxs = np.arange(X_train.shape[0])
-        np.random.shuffle(idxs)
-        tidxs = Tensor(idxs, dtype='int')[:num_steps_per_epoch*1024*80].reshape(num_steps_per_epoch, 1024*80)
-        train_loss:float = 0
-        curr_gflops = 0
-        for epoch_step in (t:=range(num_steps_per_epoch)):
-            st = time.perf_counter()
+    with Context(BEAM=2):
+        for epoch in range(math.ceil(hyp['misc']['train_epochs'])):
+            gst = time.perf_counter()
+            idxs = np.arange(X_train.shape[0])
+            np.random.shuffle(idxs)
+            tidxs = Tensor(idxs, dtype='int')[:num_steps_per_epoch*1024*80].reshape(num_steps_per_epoch, 1024*80)
+            train_loss:float = 0
+            curr_gflops = 0
+            for epoch_step in (t:=range(num_steps_per_epoch)):
+                st = time.perf_counter()
+                GlobalCounters.reset()
+                loss = train_step(tidxs[epoch_step].contiguous()).float().item()
+                current_lr = model.opt.lr.item()                
+                current_gflops = GlobalCounters.global_ops / (1e9 * (time.perf_counter() - st))
+                train_loss += loss
+
+            train_loss /= num_steps_per_epoch
+
+            gmt = time.perf_counter()
             GlobalCounters.reset()
-            loss = train_step(tidxs[epoch_step].contiguous()).float().item()
-            current_lr = model.opt.lr.item()                
-            current_gflops = GlobalCounters.global_ops / (1e9 * (time.perf_counter() - st))
-            train_loss += loss
-
-        train_loss /= num_steps_per_epoch
-
-        gmt = time.perf_counter()
-        GlobalCounters.reset()
-        val_loss = val_step().float().item()
-        get = time.perf_counter()            
-        if(epoch % 100 == 0):
-            current_lr = model.opt.lr.item()
-            model.opt.lr.assign(current_lr * 0.1).realize()
-            dashboard.update(step=0, loss=train_loss, learning_rate=current_lr, epoch=epoch, gflops=current_gflops)
+            val_loss = val_step().float().item()
+            get = time.perf_counter()            
+            if(epoch % 100 == 0):            
+                dashboard.update(step=0, loss=train_loss, learning_rate=current_lr, epoch=epoch, gflops=current_gflops)
+                
+            if(epoch % 300 == 0):
+                model.opt.lr.assign(model.opt.lr * 0.95).realize()
 
     test_loss = test_step().float().item()
     dashboard.close()

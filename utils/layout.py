@@ -63,7 +63,7 @@ class TrainingDashboard:
         if(len(losses) < 2):
             y_min, y_max = 0, 1
         else:
-            y_min, y_max = 0, max(losses[-min(len(losses)-1, 100):])*2
+            y_min, y_max = 0, max(losses[-min(len(losses)-1, 40):])*2
         
         fig.set_y_limits(min_=y_min, max_=y_max)
         fig.plot(x_vals, y_vals, label="Loss")
