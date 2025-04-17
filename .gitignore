@@ -2,4 +2,4 @@
 /database/experiment_*.db-journal
 /tinygrad/
 
-**.pyc
+*.pyc
