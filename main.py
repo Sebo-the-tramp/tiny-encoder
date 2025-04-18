@@ -6,10 +6,17 @@ from typing import Tuple, cast
 import numpy as np
 from tinygrad import Tensor, GlobalCounters, TinyJit, Context
 from tinygrad.helpers import getenv, Context
+from torch.utils.tensorboard import SummaryWriter
+import os
+from datetime import datetime
 
 from utils.data_generation import generate_dataset
 from utils.layout import TrainingDashboard
 from encoders.mlp_encoder_256 import MLPEncoder256
+
+# Create logs directory if it doesn't exist
+log_dir = os.path.join('runs', datetime.now().strftime('%Y%m%d_%H%M%S'))
+writer = SummaryWriter(log_dir)
 
 batches = 100
 
@@ -101,6 +108,13 @@ if __name__ == "__main__":
             GlobalCounters.reset()
             val_loss = val_step().float().item()
             get = time.perf_counter()            
+            
+            # Log metrics to TensorBoard
+            writer.add_scalar('Loss/train', train_loss, epoch)
+            writer.add_scalar('Loss/val', val_loss, epoch)
+            writer.add_scalar('Learning_rate', current_lr, epoch)
+            writer.add_scalar('Performance/GFLOPS', current_gflops, epoch)
+            
             if(epoch % 100 == 0):            
                 dashboard.update(step=0, loss=train_loss, learning_rate=current_lr, epoch=epoch, gflops=current_gflops)
                 
@@ -109,5 +123,6 @@ if __name__ == "__main__":
 
     test_loss = test_step().float().item()
     dashboard.close()
+    writer.close()  # Close TensorBoard writer
     print("Finished training")
     print(f"*** test_loss: {test_loss:5.10e} @ {time.perf_counter()-start_tm:6.2f} s  ")

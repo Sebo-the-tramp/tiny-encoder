@@ -1,1 +1,2 @@
 equidistantpoints
+tensorboard>=2.15.0

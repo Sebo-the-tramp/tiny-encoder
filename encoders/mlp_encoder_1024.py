@@ -33,4 +33,7 @@ class MLPEncoder1024(BaseEncoder):
         return x
     
     def loss_fn(self, out: Tensor, Y: Tensor) -> Tensor:        
-        return ((out - Y) ** 2).mean()
+
+        surface_loss = out.sum(axis=1).mean()
+
+        # return ((out - Y) ** 2).mean()
